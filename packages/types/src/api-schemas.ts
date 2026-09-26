@@ -291,7 +291,8 @@ export const huntsBulkBodySchema = z.object({
     .array(z.union([z.string(), z.number()]))
     .min(1, { message: "huntIds must be a non-empty array" }),
   confirmed: z.boolean().optional(),
-  actorAddress: nonEmptyStringSchema,
+  // actorAddress is intentionally absent: the actor is derived from the verified
+  // caller identity (wallet signature or session), never trusted from the body.
 });
 
 // ─── v1 / Hunts / [id] / Archive ─────────────────────────────────────────────
@@ -307,6 +308,12 @@ export const huntDeleteBodySchema = z.object({
   action: z.enum(["soft-delete", "restore", "permanent-delete"]),
   confirmed: z.boolean().optional(),
   actorAddress: nonEmptyStringSchema,
+});
+
+// ─── v1 / Hunts / [id] / Refund ──────────────────────────────────────────────
+
+export const huntRefundBodySchema = z.object({
+  creatorAddress: nonEmptyStringSchema,
 });
 
 // ─── v1 / Hunts / Versions ──────────────────────────────────────────────────
