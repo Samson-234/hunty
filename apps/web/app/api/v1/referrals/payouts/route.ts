@@ -1,9 +1,10 @@
+import { referralPayoutBodySchema } from "@hunty/types/api-schemas"
 import { NextResponse } from "next/server"
+
+import { withErrorHandling } from "@/lib/api/withErrorHandling"
 import { withValidation } from "@/lib/api/withValidation"
 import { getIP, rateLimit, rateLimitResponse } from "@/lib/rate-limit"
-import { withErrorHandling } from "@/lib/api/withErrorHandling"
 import { getAllPayouts, processReferralPayouts } from "@/lib/referralStore"
-import { referralPayoutBodySchema } from "@hunty/types/api-schemas"
 
 /**
  * GET /api/v1/referrals/payouts
@@ -15,7 +16,7 @@ export const GET = withErrorHandling(async (req: Request) => {
   const { success, reset } = await rateLimit(ip, { limit: 60, windowMs: 60_000 })
   if (!success) return rateLimitResponse(reset)
 
-  const payouts = getAllPayouts()
+  const payouts = await getAllPayouts()
   return NextResponse.json({ payouts, total: payouts.length })
 })
 
@@ -41,7 +42,7 @@ export const POST = withValidation(
     const { success, reset } = await rateLimit(ip, { limit: 10, windowMs: 60_000 })
     if (!success) return rateLimitResponse(reset)
 
-    const result = processReferralPayouts(
+    const result = await processReferralPayouts(
       body.period,
       body.allocations.map((a) => ({
         rank: a.rank,
