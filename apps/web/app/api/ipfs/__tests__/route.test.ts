@@ -1,84 +1,152 @@
-import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { NextRequest } from "next/server"
 
-import { POST } from "../route";
+import { MAX_IPFS_UPLOAD_BYTES } from "@/lib/upload-limits"
 
-// Mock the ipfs/route environment
+vi.mock("@/lib/logger", () => ({
+  logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+}))
+
 vi.mock("@/lib/rate-limit", () => ({
-  rateLimit: vi.fn(() => Promise.resolve({ success: true, reset: Date.now() + 60000 })),
-  getIP: vi.fn(() => "127.0.0.1"),
-}));
+  getIP: () => "127.0.0.1",
+  rateLimit: vi.fn().mockResolvedValue({ success: true, reset: 0 }),
+  rateLimitPresets: {
+    read: { limit: 100, windowMs: 60_000 },
+    write: { limit: 30, windowMs: 60_000 },
+    sensitive: { limit: 10, windowMs: 60_000 },
+  },
+}))
 
-const PINATA_JWT = "fake-jwt";
-process.env.PINATA_JWT = PINATA_JWT;
+async function loadRoute() {
+  vi.resetModules()
+  return import("../route")
+}
+
+function createUploadRequest(
+  file?: { name: string; type: string; content: string | Uint8Array },
+  headers: Record<string, string> = { "x-wallet-address": "GABCDEF123456789" }
+) {
+  const formData = new FormData()
+  if (file) {
+    const blob = new Blob([file.content], { type: file.type })
+    formData.append("file", blob, file.name)
+  }
+
+  return new NextRequest("http://localhost/api/ipfs", {
+    method: "POST",
+    headers,
+    body: formData,
+  })
+}
+
+/**
+ * Builds a request whose `formData()` returns a file-like object with a known
+ * `size`. The jsdom `FormData` ⇄ undici `File` realm boundary mangles multipart
+ * contents under test (a 4.5 MB blob parses back as 9 bytes), so the size
+ * boundary cannot be exercised through real multipart parsing.
+ */
+function createSizedUploadRequest(size: number, type = "image/png") {
+  const req = new NextRequest("http://localhost/api/ipfs", {
+    method: "POST",
+    headers: { "x-wallet-address": "GABCDEF123456789" },
+  })
+  const file = { size, type }
+  Object.defineProperty(req, "formData", {
+    value: async () => ({ get: (key: string) => (key === "file" ? file : null) }),
+  })
+  return req
+}
 
 describe("POST /api/ipfs", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    process.env.PINATA_JWT = "mock-pinata-jwt-token"
+    vi.restoreAllMocks()
+  })
 
-    // Default fetch mock (success)
-    global.fetch = vi.fn(() =>
-      Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ IpfsHash: "QmTest123" }),
-      } as Response)
-    );
-  });
+  it("returns 503 if PINATA_JWT is not configured", async () => {
+    delete process.env.PINATA_JWT
+    const { POST } = await loadRoute()
+    const req = createUploadRequest({ name: "test.png", type: "image/png", content: "data" })
+    const res = await POST(req)
+    expect(res.status).toBe(503)
+  })
 
-  function createMockRequest(
-    file: File | Blob | string | null,
-    headers: Record<string, string> = {}
-  ) {
-    const formData = new FormData();
-    if (file !== null) {
-      formData.append("file", file);
-    }
+  it("returns 400 if wallet address header is missing", async () => {
+    const { POST } = await loadRoute()
+    const req = createUploadRequest(
+      { name: "test.png", type: "image/png", content: "data" },
+      {}
+    )
+    const res = await POST(req)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toContain("Wallet address required")
+  })
 
-    return new NextRequest("http://localhost/api/ipfs", {
-      method: "POST",
-      headers: {
-        "x-wallet-address": "test-wallet",
-        ...headers,
-      },
-      body: formData,
-    });
-  }
+  it("returns 400 if no file is provided in formData", async () => {
+    const { POST } = await loadRoute()
+    const req = createUploadRequest(undefined)
+    const res = await POST(req)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toContain("No file provided")
+  })
 
-  it("accepts an allowed MIME type and returns CID", async () => {
-    const file = new File(["test data"], "test.png", { type: "image/png" });
-    const req = createMockRequest(file);
-
-    const res = await POST(req);
-    expect(res.status).toBe(200);
-
-    const json = await res.json();
-    expect(json.cid).toBe("QmTest123");
-  });
-
-  it("rejects a disallowed MIME type", async () => {
-    const file = new File(["some malicious script"], "test.exe", {
+  it("returns 400 when file MIME type is disallowed", async () => {
+    const { POST } = await loadRoute()
+    const req = createUploadRequest({
+      name: "script.exe",
       type: "application/x-msdownload",
-    });
-    const req = createMockRequest(file);
+      content: "binarydata",
+    })
+    const res = await POST(req)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toContain("File type not allowed")
+  })
 
-    const res = await POST(req);
-    // withErrorHandling usually maps ValidationError to 400
-    expect(res.status).toBe(400);
+  it("returns 400 when file exceeds the platform upload cap", async () => {
+    const { POST } = await loadRoute()
+    const req = createSizedUploadRequest(MAX_IPFS_UPLOAD_BYTES + 1)
 
-    const json = await res.json();
-    expect(json.error).toBe("File type not allowed");
-  });
+    const res = await POST(req)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toContain("too large")
+    expect(body.error).toContain("4.5 MB")
+  })
 
-  it("rejects a file that is too large", async () => {
-    // 50MB + 1 byte
-    const largeContent = new ArrayBuffer(50 * 1024 * 1024 + 1);
-    const file = new File([largeContent], "large.png", { type: "image/png" });
-    const req = createMockRequest(file);
+  it("accepts a file exactly at the upload cap", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ IpfsHash: "QmBoundaryCid" }),
+    } as any)
 
-    const res = await POST(req);
-    expect(res.status).toBe(400);
+    const { POST } = await loadRoute()
+    const req = createSizedUploadRequest(MAX_IPFS_UPLOAD_BYTES)
 
-    const json = await res.json();
-    expect(json.error).toBe("File too large");
-  });
-});
+    const res = await POST(req)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.cid).toBe("QmBoundaryCid")
+  })
+
+  it("accepts allowed MIME types and pins file to IPFS", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ IpfsHash: "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco" }),
+    } as any)
+
+    const { POST } = await loadRoute()
+    const req = createUploadRequest({
+      name: "avatar.png",
+      type: "image/png",
+      content: "png-image-content",
+    })
+
+    const res = await POST(req)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.cid).toBe("QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco")
+  })
+})
