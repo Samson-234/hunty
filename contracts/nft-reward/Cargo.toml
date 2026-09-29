@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
-soroban-sdk = { version = "22.0.1" }
+soroban-sdk = "22.0.1"
 
 [dev-dependencies]
 soroban-sdk = { version = "22.0.1", features = ["testutils"] }
@@ -24,3 +24,7 @@ debug-assertions = false
 panic = "abort"
 codegen-units = 1
 lto = true
+
+[profile.release-with-logs]
+inherits = "release"
+debug-assertions = true
