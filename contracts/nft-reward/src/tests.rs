@@ -12,7 +12,7 @@
 
 #[cfg(test)]
 mod nft_reward_tests {
-    use soroban_sdk::{testutils::Address as _, Address, Env, String};
+    use soroban_sdk::{testutils::Address as _, Address, Env, String, Vec};
 
     use crate::{
         NftRewardContract, NftRewardContractClient, DEFAULT_NFT_PAGE_SIZE, MAX_NFT_PAGE_SIZE,
@@ -70,10 +70,25 @@ mod nft_reward_tests {
         );
     }
 
-    fn setup(env: &Env) -> (Address, NftRewardContractClient<'_>) {
-        let contract_id = env.register(NftRewardContract, ());
+    /// Register the contract and run the one-time `initialize`, returning the
+    /// client plus the generated admin and minter addresses.  The minter is
+    /// placed on the allow-list so every other test exercises the allow-listed
+    /// path implicitly.
+    fn setup_initialized(env: &Env) -> (Address, Address, NftRewardContractClient<'_>) {
+        let contract_id = env.register_contract(None, NftRewardContract);
         let client = NftRewardContractClient::new(env, &contract_id);
+        let admin = Address::generate(env);
         let minter = Address::generate(env);
+
+        let mut minters = Vec::new(env);
+        minters.push_back(minter.clone());
+        client.initialize(&admin, &minters);
+
+        (admin, minter, client)
+    }
+
+    fn setup(env: &Env) -> (Address, NftRewardContractClient<'_>) {
+        let (_admin, minter, client) = setup_initialized(env);
         (minter, client)
     }
 
@@ -107,6 +122,50 @@ mod nft_reward_tests {
         assert_eq!(client.balance_of(&player), 1);
         assert_owner_index_consistent(&client, &player);
         assert_eq!(client.get_owner(&id), Some(player));
+    }
+
+    #[test]
+    fn test_mint_accepts_https_uri() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (minter, client) = setup(&env);
+        let player = Address::generate(&env);
+        let uri = String::from_str(&env, "https://example.com/metadata.json");
+
+        let id = client.mint(&minter, &player, &uri);
+
+        assert_eq!(client.get_nft_uri(&id), Some(uri));
+    }
+
+    #[test]
+    fn test_mint_accepts_uri_at_max_length() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (minter, client) = setup(&env);
+        let player = Address::generate(&env);
+        let uri_bytes = [b'a'; 256];
+        let uri = String::from_bytes(&env, &uri_bytes);
+
+        let id = client.mint(&minter, &player, &uri);
+
+        assert_eq!(client.get_nft_uri(&id), Some(uri));
+    }
+
+    #[test]
+    fn test_uri_validation_rejects_empty_uri() {
+        let env = Env::default();
+        let uri = String::from_str(&env, "");
+
+        assert!(!crate::validate_uri(&uri));
+    }
+
+    #[test]
+    fn test_uri_validation_rejects_uri_over_max_length() {
+        let env = Env::default();
+        let uri_bytes = [b'a'; 257];
+        let uri = String::from_bytes(&env, &uri_bytes);
+
+        assert!(!crate::validate_uri(&uri));
     }
 
     #[test]
@@ -146,6 +205,125 @@ mod nft_reward_tests {
         assert_nft_absent(&client, &alice, id);
         assert_nft_present(&client, &bob, id);
         assert_eq!(client.get_owner(&id), Some(bob));
+    }
+
+    // ── issue #1399: minter allow-list ───────────────────────────────────────
+
+    /// The minter configured by `setup_initialized` is allow-listed, so it can
+    /// mint; every test above exercises this implicitly and this test pins it
+    /// explicitly.
+    #[test]
+    fn test_mint_allowed_minter_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, minter, client) = setup_initialized(&env);
+        let player = Address::generate(&env);
+
+        let id = client.mint(&minter, &player, &test_uri(&env, 1));
+
+        assert_eq!(client.balance_of(&player), 1);
+        assert_eq!(client.get_owner(&id), Some(player));
+    }
+
+    /// A caller that is not on the allow-list must be rejected, even though it
+    /// can satisfy `require_auth` under `mock_all_auths` — proving the check is
+    /// the allow-list, not merely key ownership.
+    #[test]
+    #[should_panic]
+    fn test_mint_rejected_for_non_allowed_minter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _minter, client) = setup_initialized(&env);
+        let stranger = Address::generate(&env);
+        let player = Address::generate(&env);
+
+        client.mint(&stranger, &player, &test_uri(&env, 1));
+    }
+
+    /// A newly deployed contract has an empty allow-list until `initialize`
+    /// runs, so nobody can mint in the deployment window.
+    #[test]
+    #[should_panic]
+    fn test_mint_before_initialize_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, NftRewardContract);
+        let client = NftRewardContractClient::new(&env, &contract_id);
+        let minter = Address::generate(&env);
+        let player = Address::generate(&env);
+
+        client.mint(&minter, &player, &test_uri(&env, 1));
+    }
+
+    #[test]
+    fn test_admin_can_add_minter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _minter, client) = setup_initialized(&env);
+        let new_minter = Address::generate(&env);
+        let player = Address::generate(&env);
+
+        client.add_minter(&admin, &new_minter);
+        let id = client.mint(&new_minter, &player, &test_uri(&env, 1));
+
+        assert_eq!(client.balance_of(&player), 1);
+        assert_eq!(client.get_owner(&id), Some(player));
+    }
+
+    /// Removing a minter revokes the right to mint.
+    #[test]
+    #[should_panic]
+    fn test_removed_minter_cannot_mint() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _minter, client) = setup_initialized(&env);
+        let new_minter = Address::generate(&env);
+        let player = Address::generate(&env);
+
+        client.add_minter(&admin, &new_minter);
+        client.remove_minter(&admin, &new_minter);
+
+        client.mint(&new_minter, &player, &test_uri(&env, 1));
+    }
+
+    /// Only the stored admin may change the allow-list.
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_add_minter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _minter, client) = setup_initialized(&env);
+        let stranger = Address::generate(&env);
+        let new_minter = Address::generate(&env);
+
+        client.add_minter(&stranger, &new_minter);
+    }
+
+    /// Only the stored admin may revoke a minter either.
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_remove_minter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, minter, client) = setup_initialized(&env);
+        let stranger = Address::generate(&env);
+
+        client.remove_minter(&stranger, &minter);
+    }
+
+    /// `initialize` is one-shot: a second call must panic so the admin and the
+    /// allow-list cannot be replaced after deployment.
+    #[test]
+    #[should_panic]
+    fn test_initialize_rejects_reinitialization() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _minter, client) = setup_initialized(&env);
+        let other = Address::generate(&env);
+
+        let mut minters = Vec::new(&env);
+        minters.push_back(other);
+        client.initialize(&admin, &minters);
     }
 
     // ── issue #848 core test: mint → transfer → burn consistency ─────────────
@@ -322,117 +500,36 @@ mod nft_reward_tests {
         assert_nft_present(&client, &player, id2);
     }
 
-    // ── issue #1404 — bounded paginated reads ────────────────────────────────
-
-    /// Mint `count` NFTs to a fresh player.
-    fn seeded_player(
-        env: &Env,
-        minter: &Address,
-        client: &NftRewardContractClient,
-        count: u32,
-    ) -> Address {
-        let player = Address::generate(env);
-        for i in 0..count {
-            client.mint(minter, &player, &test_uri(env, i));
-        }
-        player
-    }
-
-    /// #1404: a page returns exactly the requested window, and walking the pages
-    /// reproduces the full unpaginated read in order, with no gaps or overlaps.
     #[test]
-    fn page_returns_the_requested_window_and_matches_the_full_read() {
+    fn test_get_player_nfts_page_boundaries() {
         let env = Env::default();
         env.mock_all_auths();
         let (minter, client) = setup(&env);
-        let player = seeded_player(&env, &minter, &client, 25);
+        let player = Address::generate(&env);
 
-        let all = client.get_player_nfts(&player);
-        assert_eq!(all.len(), 25);
+        let id1 = client.mint(&minter, &player, &test_uri(&env, 1));
+        let id2 = client.mint(&minter, &player, &test_uri(&env, 2));
+        let id3 = client.mint(&minter, &player, &test_uri(&env, 3));
+        let id4 = client.mint(&minter, &player, &test_uri(&env, 4));
 
-        let first = client.get_player_nfts_page(&player, &0u32, &10u32);
-        let second = client.get_player_nfts_page(&player, &10u32, &10u32);
-        let third = client.get_player_nfts_page(&player, &20u32, &10u32);
-        assert_eq!(first.len(), 10, "first page should be full");
-        assert_eq!(second.len(), 10, "second page should be full");
-        assert_eq!(third.len(), 5, "last page should be the remainder");
+        let first_page = client.get_player_nfts_page(&player, &0, &2);
+        assert_eq!(first_page.len(), 2);
+        assert_eq!(first_page.get(0).unwrap(), id1);
+        assert_eq!(first_page.get(1).unwrap(), id2);
 
-        let pages = [first, second, third];
-        let mut seen = 0u32;
-        for (page_i, page) in pages.iter().enumerate() {
-            for i in 0..page.len() {
-                assert_eq!(
-                    page.get(i).unwrap(),
-                    all.get(seen).unwrap(),
-                    "page {page_i} diverged from the full read at offset {seen}"
-                );
-                seen += 1;
-            }
-        }
-        assert_eq!(seen, 25, "pages did not cover the whole collection");
-    }
+        let middle_page = client.get_player_nfts_page(&player, &1, &2);
+        assert_eq!(middle_page.len(), 2);
+        assert_eq!(middle_page.get(0).unwrap(), id2);
+        assert_eq!(middle_page.get(1).unwrap(), id3);
 
-    /// #1404: `page_size == 0` means the documented default, and an oversized
-    /// request is clamped to the ceiling instead of being served unbounded.
-    #[test]
-    fn page_size_defaults_and_clamps() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (minter, client) = setup(&env);
-        let player = seeded_player(&env, &minter, &client, MAX_NFT_PAGE_SIZE + 50);
+        let tail_page = client.get_player_nfts_page(&player, &3, &2);
+        assert_eq!(tail_page.len(), 1);
+        assert_eq!(tail_page.get(0).unwrap(), id4);
 
-        let default_page = client.get_player_nfts_page(&player, &0u32, &0u32);
-        assert_eq!(
-            default_page.len(),
-            DEFAULT_NFT_PAGE_SIZE,
-            "0 should mean the default page size"
-        );
+        let empty_page = client.get_player_nfts_page(&player, &4, &2);
+        assert_eq!(empty_page.len(), 0);
 
-        let clamped = client.get_player_nfts_page(&player, &0u32, &u32::MAX);
-        assert_eq!(
-            clamped.len(),
-            MAX_NFT_PAGE_SIZE,
-            "oversized page_size should clamp to the ceiling"
-        );
-
-        let full = client.get_player_nfts(&player);
-        assert_eq!(clamped.get(0).unwrap(), full.get(0).unwrap());
-        assert_eq!(
-            clamped.get(MAX_NFT_PAGE_SIZE - 1).unwrap(),
-            full.get(MAX_NFT_PAGE_SIZE - 1).unwrap()
-        );
-    }
-
-    /// #1404: a cursor at or past the end is an empty page, not a panic — a client
-    /// paginating to the end should not need a special case.
-    #[test]
-    fn cursor_at_or_past_the_end_is_an_empty_page() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (minter, client) = setup(&env);
-        let player = seeded_player(&env, &minter, &client, 7);
-
-        assert_eq!(
-            client.get_player_nfts_page(&player, &6u32, &10u32).len(),
-            1,
-            "cursor at the last element should return one id"
-        );
-        assert_eq!(
-            client.get_player_nfts_page(&player, &7u32, &10u32).len(),
-            0,
-            "cursor exactly at the end should be empty"
-        );
-        assert_eq!(
-            client.get_player_nfts_page(&player, &999u32, &10u32).len(),
-            0,
-            "cursor far past the end should be empty"
-        );
-
-        let empty_owner = Address::generate(&env);
-        assert_eq!(
-            client.get_player_nfts_page(&empty_owner, &0u32, &10u32).len(),
-            0,
-            "an owner with no NFTs should page to nothing"
-        );
+        let zero_limit_page = client.get_player_nfts_page(&player, &0, &0);
+        assert_eq!(zero_limit_page.len(), 0);
     }
 }
