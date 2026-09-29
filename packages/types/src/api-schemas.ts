@@ -178,31 +178,36 @@ export const pushTokenDeleteBodySchema = z
 
 // ─── Webhooks ───────────────────────────────────────────────────────────────
 
-export const webhookEventSchema = z.enum(["hunt.published", "hunt.joined", "hunt.completed"])
+export const webhookEventSchema = z.enum(["hunt.published", "hunt.joined", "hunt.completed"]);
 
 export const webhookCreateBodySchema = z.object({
   creatorAddress: stellarAddressSchema,
   url: z.string().url().max(2048),
   events: z.array(webhookEventSchema).min(1).max(3),
-})
+});
 
-export const webhookUpdateBodySchema = z.object({
-  url: z.string().url().max(2048).optional(),
-  events: z.array(webhookEventSchema).min(1).max(3).optional(),
-  active: z.boolean().optional(),
-}).refine((body) => body.url !== undefined || body.events !== undefined || body.active !== undefined, {
-  message: "At least one field is required",
-})
+export const webhookUpdateBodySchema = z
+  .object({
+    url: z.string().url().max(2048).optional(),
+    events: z.array(webhookEventSchema).min(1).max(3).optional(),
+    active: z.boolean().optional(),
+  })
+  .refine(
+    (body) => body.url !== undefined || body.events !== undefined || body.active !== undefined,
+    {
+      message: "At least one field is required",
+    }
+  );
 
 export const webhookQuerySchema = z.object({
   creatorAddress: stellarAddressSchema,
-})
+});
 
 export const webhookEmitBodySchema = z.object({
   type: webhookEventSchema,
   creatorAddress: stellarAddressSchema,
   data: z.record(z.string(), z.unknown()),
-})
+});
 
 // ─── Moderation / Submit ─────────────────────────────────────────────────────
 
@@ -226,16 +231,16 @@ export const notificationPreferencesPatchSchema = z.object({
   pushHuntCancelled: z.boolean().optional(),
   pushPlayerRegistered: z.boolean().optional(),
   pushFirstCompletion: z.boolean().optional(),
-})
+});
 
 export const notificationPreferencesQuerySchema = z.object({
   walletAddress: nonEmptyStringSchema,
-})
+});
 
 export const notificationPreferencesBodySchema = z.object({
   walletAddress: nonEmptyStringSchema,
   preferences: notificationPreferencesPatchSchema,
-})
+});
 
 export const moderationSubmitBodySchema = z.object({
   hunt: z
@@ -301,6 +306,13 @@ export const huntArchiveBodySchema = z.object({
   actorAddress: nonEmptyStringSchema,
 });
 
+// ─── v1 / Hunts / [id] / Refund ──────────────────────────────────────────────
+
+export const huntRefundBodySchema = z.object({
+  /** Stellar address of the hunt creator reclaiming unclaimed rewards. */
+  creatorAddress: nonEmptyStringSchema,
+});
+
 // ─── v1 / Hunts / [id] / Delete ──────────────────────────────────────────────
 
 export const huntDeleteBodySchema = z.object({
@@ -309,24 +321,41 @@ export const huntDeleteBodySchema = z.object({
   actorAddress: nonEmptyStringSchema,
 });
 
+// ─── v1 / Hunts / [id] / Refund ──────────────────────────────────────────────
+
+/**
+ * POST /api/v1/hunts/[id]/refund
+ * Lets the hunt creator reclaim unclaimed rewards after the hunt ends and the
+ * grace period has elapsed.
+ */
+export const huntRefundBodySchema = z.object({
+  creatorAddress: nonEmptyStringSchema,
+});
+
+export const huntRefundBodySchema = z.object({
+  creatorAddress: nonEmptyStringSchema,
+});
+
 // ─── v1 / Hunts / Versions ──────────────────────────────────────────────────
 
-export const huntSnapshotSchema = z.object({
-  id: positiveIntSchema,
-}).passthrough()
+export const huntSnapshotSchema = z
+  .object({
+    id: positiveIntSchema,
+  })
+  .passthrough();
 
 export const huntVersionEditBodySchema = z.object({
   actorAddress: nonEmptyStringSchema,
   snapshot: huntSnapshotSchema,
-})
+});
 
 export const huntVersionRestoreBodySchema = z.object({
   actorAddress: nonEmptyStringSchema,
-})
+});
 
 export const huntVersionsQuerySchema = z.object({
   actorAddress: nonEmptyStringSchema,
-})
+});
 
 // ─── v1 / Hunts / [id] / Collaborators ───────────────────────────────────────
 
@@ -362,11 +391,31 @@ export const collaboratorsBodySchema = z.discriminatedUnion("action", [
 export const presencePingBodySchema = z.object({
   walletAddress: nonEmptyStringSchema,
   editingField: z.string().optional().nullable(),
-})
+});
 
 export const presenceQuerySchema = z.object({
   walletAddress: nonEmptyStringSchema.optional(),
   staleMs: z.number().int().positive().optional().default(30000),
+});
+
+// ─── v1 / Hunts / [id] / Analytics / Clues ──────────────────────────────────
+
+export const clueAnalyticsQuerySchema = z.object({
+  /**
+   * Solve-rate percentage (0–100) below which a clue is flagged as an
+   * abandonment point. Defaults to 40 (i.e. fewer than 40 % of unique
+   * players solved the clue).
+   */
+  threshold: z
+    .string()
+    .optional()
+    .transform((v) => (v !== undefined ? Number(v) : 40))
+    .pipe(
+      z
+        .number()
+        .min(0, { message: "threshold must be ≥ 0" })
+        .max(100, { message: "threshold must be ≤ 100" }),
+    ),
 })
 
 // ─── v1 / Hunts / [id] / Progress ────────────────────────────────────────────
@@ -470,7 +519,7 @@ export const draftPatchBodySchema = z.object({
 export const huntSponsorBodySchema = z.object({
   sponsorAddress: stellarAddressSchema,
   amount: z.number().positive({ message: "amount must be a positive number" }),
-})
+});
 
 // ─── Paymaster / Sponsor ─────────────────────────────────────────────────────
 
@@ -500,7 +549,7 @@ export const referralLeaderboardQuerySchema = z.object({
   period: z.enum(["all", "week", "month"]).optional().default("all"),
   /** If provided, also returns this player's rank on the board. */
   address: z.string().optional(),
-})
+});
 
 // ─── v1 / Referrals / Track ───────────────────────────────────────────────────
 
@@ -515,7 +564,7 @@ export const referralTrackBodySchema = z.object({
   sessionId: z.string().optional(),
   /** Hunt context, if the referral was triggered from a hunt page. */
   huntId: z.number().int().positive().optional(),
-})
+});
 
 // ─── v1 / Referrals / Payouts ────────────────────────────────────────────────
 
@@ -528,7 +577,7 @@ export const referralPayoutAllocationSchema = z.object({
   amount: z.number().positive(),
   /** Type of reward being distributed. */
   rewardType: z.enum(["xlm", "points"]).default("points"),
-})
+});
 
 export const referralPayoutBodySchema = z.object({
   /** Time period this payout covers (for record-keeping). */
@@ -537,7 +586,7 @@ export const referralPayoutBodySchema = z.object({
   allocations: z.array(referralPayoutAllocationSchema).min(1),
   /** When true, actually executes the payouts. When false (default), dry-run only. */
   execute: z.boolean().optional().default(false),
-})
+});
 
 // ─── Re-export convenience map ───────────────────────────────────────────────
 

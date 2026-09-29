@@ -78,9 +78,7 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
     );
   }
 
-  const secret = isFirstRegistration ? mintSecret() : storedSecret!;
-
-  await upsertSubscription(subscription, walletAddress, preferences, secret);
+  await upsertSubscription(subscription, walletAddress, preferences);
 
   if (isFirstRegistration) {
     // Returned once. The client persists it and sends it on later updates or
@@ -118,6 +116,7 @@ export const DELETE = withErrorHandling(async (request: NextRequest) => {
   }
 
   await removeSubscriptionsForWallet(walletAddress);
+  ownerSecrets.delete(key);
 
   return NextResponse.json({ success: true });
 });
