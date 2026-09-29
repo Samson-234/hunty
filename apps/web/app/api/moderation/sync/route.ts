@@ -1,22 +1,22 @@
-import { moderationSyncBodySchema } from "@hunty/types/api-schemas";
-import { NextRequest, NextResponse } from "next/server";
+import { moderationSyncBodySchema } from "@hunty/types/api-schemas"
+import { NextRequest, NextResponse } from "next/server"
 
-import { assertAdminAuth } from "@/lib/api/adminAuth";
-import { NotFoundError, RateLimitError } from "@/lib/api/errors";
-import { withErrorHandling } from "@/lib/api/withErrorHandling";
-import { withValidation } from "@/lib/api/withValidation";
+import { assertAdminAuth } from "@/lib/api/adminAuth"
+import { NotFoundError, RateLimitError } from "@/lib/api/errors"
+import { withErrorHandling } from "@/lib/api/withErrorHandling"
+import { withValidation } from "@/lib/api/withValidation"
 import {
   getCreatorNotifications,
   getModerationStatusForHunts,
   markNotificationRead,
-} from "@/lib/moderation/dbStore";
-import { getIP, rateLimit } from "@/lib/rate-limit";
+} from "@/lib/moderation/dbStore"
+import { getIP, rateLimit, rateLimitPresets } from "@/lib/rate-limit"
 
 export const GET = withErrorHandling(async (req: NextRequest) => {
   await assertAdminAuth(req);
 
-  const ip = getIP(req);
-  const ipResult = await rateLimit(`sync_ip:${ip}`, { limit: 60, windowMs: 60 * 1000 });
+  const ip = getIP(req)
+  const ipResult = await rateLimit(`sync_ip:${ip}`, rateLimitPresets.read)
   if (!ipResult.success) {
     throw new RateLimitError("Too many sync requests from this IP", {
       reset: ipResult.reset,
@@ -45,8 +45,8 @@ export const POST = withErrorHandling(
     async (req: NextRequest, _context, { body }) => {
       await assertAdminAuth(req);
 
-      const ip = getIP(req);
-      const ipResult = await rateLimit(`sync_ip:${ip}`, { limit: 60, windowMs: 60 * 1000 });
+      const ip = getIP(req)
+      const ipResult = await rateLimit(`sync_ip:${ip}`, rateLimitPresets.read)
       if (!ipResult.success) {
         throw new RateLimitError("Too many sync requests from this IP", {
           reset: ipResult.reset,
@@ -61,4 +61,4 @@ export const POST = withErrorHandling(
       return NextResponse.json({ success: true });
     }
   )
-);
+)
