@@ -14,7 +14,9 @@
 mod nft_reward_tests {
     use soroban_sdk::{testutils::Address as _, Address, Env, String, Vec};
 
-    use crate::{NftRewardContract, NftRewardContractClient};
+    use crate::{
+        NftRewardContract, NftRewardContractClient, DEFAULT_NFT_PAGE_SIZE, MAX_NFT_PAGE_SIZE,
+    };
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
