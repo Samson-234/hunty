@@ -331,7 +331,8 @@ export const huntsBulkBodySchema = z.object({
     .array(z.union([z.string(), z.number()]))
     .min(1, { message: "huntIds must be a non-empty array" }),
   confirmed: z.boolean().optional(),
-  actorAddress: nonEmptyStringSchema,
+  // actorAddress is intentionally absent: the actor is derived from the verified
+  // caller identity (wallet signature or session), never trusted from the body.
 });
 
 // ─── v1 / Hunts / [id] / Archive ─────────────────────────────────────────────
