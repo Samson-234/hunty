@@ -7,19 +7,18 @@
  */
 
 import { NextResponse } from "next/server";
+import { z } from "zod";
 
 import { ValidationError } from "@/lib/api/errors";
 import { withErrorHandling } from "@/lib/api/withErrorHandling";
 import { withValidation } from "@/lib/api/withValidation";
-import { requireVerifiedWallet } from "@/lib/api/walletAuth";
-import { getIP, rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import {
   followCreator,
   getFollowersCount,
   isFollowing,
   unfollowCreator,
 } from "@/lib/follows";
-import { z } from "zod";
+import { getIP, rateLimit, rateLimitPresets, rateLimitResponse } from "@/lib/rate-limit";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -39,22 +38,16 @@ export const POST = withValidation(
   { body: bodySchema, params: paramsSchema },
   async (_req: Request, _context: Context, { body, params }) => {
     const ip = getIP(_req);
-    const { success, reset } = await rateLimit(ip, { limit: 50, windowMs: 60 * 1000 });
+    const { success, reset } = await rateLimit(ip, rateLimitPresets.write);
     if (!success) return rateLimitResponse(reset);
 
-    const actorWallet = requireVerifiedWallet(_req, {
-      purpose: "creator-follow-write",
-      challenge: body.challenge,
-      signature: body.signature,
-      claimedAddress: body.followerWallet,
-    });
-    const record = followCreator(actorWallet, params.id);
+    const record = await followCreator(body.followerWallet, params.id);
 
     return NextResponse.json({
       following: true,
       creatorWallet: params.id,
       followerWallet: record.followerWallet,
-      followersCount: getFollowersCount(params.id),
+      followersCount: await getFollowersCount(params.id),
     });
   }
 );
@@ -63,23 +56,17 @@ export const DELETE = withValidation(
   { body: bodySchema, params: paramsSchema },
   async (_req: Request, _context: Context, { body, params }) => {
     const ip = getIP(_req);
-    const { success, reset } = await rateLimit(ip, { limit: 50, windowMs: 60 * 1000 });
+    const { success, reset } = await rateLimit(ip, rateLimitPresets.write);
     if (!success) return rateLimitResponse(reset);
 
-    const actorWallet = requireVerifiedWallet(_req, {
-      purpose: "creator-follow-write",
-      challenge: body.challenge,
-      signature: body.signature,
-      claimedAddress: body.followerWallet,
-    });
-    const removed = unfollowCreator(actorWallet, params.id);
+    const removed = await unfollowCreator(body.followerWallet, params.id);
 
     return NextResponse.json({
       following: false,
       creatorWallet: params.id,
       followerWallet: actorWallet,
       removed,
-      followersCount: getFollowersCount(params.id),
+      followersCount: await getFollowersCount(params.id),
     });
   }
 );
@@ -93,7 +80,7 @@ export const GET = withErrorHandling<Context>(async (req: Request, { params }) =
   return NextResponse.json({
     creatorWallet,
     followerWallet,
-    following: isFollowing(followerWallet, creatorWallet),
-    followersCount: getFollowersCount(creatorWallet),
+    following: await isFollowing(followerWallet, creatorWallet),
+    followersCount: await getFollowersCount(creatorWallet),
   });
 });
