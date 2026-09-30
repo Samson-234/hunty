@@ -1,8 +1,6 @@
 import { useRouter } from 'expo-router';
-import { Pressable, StyleSheet } from 'react-native';
-
-import { ThemedCustomText, ThemedView } from '@components/themed';
 import type { StoredHunt } from '@lib/types';
+import { ThemedCustomText, ThemedView } from '@components/themed';
 import { useTheme } from '@providers/ThemeProvider';
 
 interface HuntFeedItemProps {
